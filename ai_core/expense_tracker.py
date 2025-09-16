@@ -1,39 +1,58 @@
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
+from decimal import Decimal
 import pandas as pd
 import asyncio
+from .database_manager import db_manager
 
 class ExpenseTracker:
     """Tracks and analyzes user expenses"""
     
     def __init__(self):
-        # TODO: Initialize database connection
-        pass
+        self.db = db_manager
+    
+    async def initialize(self):
+        """Initialize database connection"""
+        await self.db.initialize()
     
     async def get_user_expenses(self, user_id: str, days: int = 90) -> List[Dict[str, Any]]:
         """Get user expenses for the specified number of days"""
-        # TODO: Implement database query
-        # For now, return sample data
-        return await self._get_sample_expenses(user_id, days)
+        try:
+            expenses = await self.db.get_user_expenses(user_id, days)
+            if not expenses:
+                # Return sample data if no real data exists
+                return await self._get_sample_expenses(user_id, days)
+            # Normalize DB rows to expected schema
+            normalized: List[Dict[str, Any]] = []
+            for exp in expenses:
+                exp = dict(exp)
+                if 'category' not in exp and 'category_name' in exp:
+                    exp['category'] = exp['category_name']
+                # Coerce amount to float
+                amt = exp.get('amount')
+                if isinstance(amt, Decimal):
+                    exp['amount'] = float(amt)
+                # Ensure date is ISO string for pandas
+                dt = exp.get('date')
+                if isinstance(dt, datetime):
+                    exp['date'] = dt.isoformat()
+                normalized.append(exp)
+            return normalized
+        except Exception as e:
+            print(f"Error getting expenses from database: {e}")
+            # Fallback to sample data
+            return await self._get_sample_expenses(user_id, days)
     
     async def add_expense(self, user_id: str, expense_data: Dict[str, Any]) -> Dict[str, Any]:
         """Add a new expense for a user"""
         try:
-            # TODO: Implement database insertion
-            expense = {
-                "id": f"exp_{datetime.now().timestamp()}",
-                "user_id": user_id,
-                "amount": expense_data["amount"],
-                "category": expense_data["category"],
-                "description": expense_data.get("description", ""),
-                "date": expense_data.get("date", datetime.now().isoformat()),
-                "merchant": expense_data.get("merchant", ""),
-                "payment_method": expense_data.get("payment_method", ""),
-                "tags": expense_data.get("tags", [])
-            }
+            # Save to database
+            expense = await self.db.add_expense(user_id, expense_data)
             
-            # TODO: Save to database
-            return {"success": True, "expense": expense}
+            if expense:
+                return {"success": True, "expense": expense}
+            else:
+                return {"success": False, "error": "Failed to save expense to database"}
             
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -41,6 +60,32 @@ class ExpenseTracker:
     async def get_expense_summary(self, user_id: str, days: int = 30) -> Dict[str, Any]:
         """Get expense summary and analytics"""
         try:
+            # Try to get summary from database first
+            summary = await self.db.get_expense_summary(user_id, days)
+            
+            if summary and summary.get('total_spent', 0) > 0:
+                # Add additional analysis
+                expenses = await self.get_user_expenses(user_id, days)
+                if expenses:
+                    df = pd.DataFrame(expenses)
+                    df['date'] = pd.to_datetime(df['date'])
+                    df['amount'] = pd.to_numeric(df['amount'])
+                    
+                    # Spending trends
+                    daily_spending = df.groupby(df['date'].dt.date)['amount'].sum()
+                    spending_trend = self._calculate_spending_trend(daily_spending)
+                    
+                    # Budget analysis
+                    budget_analysis = await self._analyze_budget_compliance(user_id, summary['total_spent'], days)
+                    
+                    summary.update({
+                        "spending_trend": spending_trend,
+                        "budget_analysis": budget_analysis
+                    })
+                
+                return summary
+            
+            # Fallback to sample data analysis
             expenses = await self.get_user_expenses(user_id, days)
             
             if not expenses:
@@ -276,13 +321,30 @@ class ExpenseTracker:
     
     async def _get_user_financial_profile(self, user_id: str) -> Dict[str, Any]:
         """Get user's financial profile and goals"""
-        # TODO: Implement database query
+        try:
+            profile = await self.db.get_user_profile(user_id)
+            if profile:
+                return {
+                    "monthly_budget": float(profile.get('monthly_budget', 3000)),
+                    "target_daily_spending": float(profile.get('target_daily_spending', 100)),
+                    "savings_goal": float(profile.get('savings_goal', 500)),
+                    "risk_tolerance": profile.get('risk_tolerance', 'moderate'),
+                    "investment_horizon": profile.get('investment_horizon', 'long_term'),
+                    "age": profile.get('age', 35),
+                    "monthly_income": float(profile.get('monthly_income', 0))
+                }
+        except Exception as e:
+            print(f"Error getting user profile: {e}")
+        
+        # Default fallback
         return {
             "monthly_budget": 3000,
             "target_daily_spending": 100,
             "savings_goal": 500,
             "risk_tolerance": "moderate",
-            "financial_goals": ["emergency_fund", "retirement", "vacation"]
+            "investment_horizon": "long_term",
+            "age": 35,
+            "monthly_income": 0
         }
     
     def _prioritize_recommendations(self, recommendations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

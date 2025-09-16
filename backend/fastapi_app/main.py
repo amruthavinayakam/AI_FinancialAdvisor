@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from typing import Dict, List, Any, Optional
 import sys
 import asyncio
+from langchain.schema import HumanMessage, SystemMessage
 
 # Add the AI core module to the path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'ai_core'))
@@ -56,6 +57,7 @@ forecaster = FinancialForecaster()
 async def startup():
     """Initialize database connection and AI services"""
     try:
+        # Initialize database connection pool
         app.state.db_pool = await asyncpg.create_pool(
             user=DB_USER,
             password=DB_PASS,
@@ -63,9 +65,13 @@ async def startup():
             host=DB_HOST,
             port=DB_PORT
         )
-        print("✅ Database connection established")
+        print("✅ Database connection pool established")
         
-        # Initialize AI services
+        # Initialize AI services with database connections
+        await expense_tracker.initialize()
+        print("✅ Expense tracker initialized with database")
+        
+        # Initialize other AI services
         print("✅ AI services initialized")
         
     except Exception as e:
@@ -187,6 +193,9 @@ async def add_expense(
             "message": "Expense added successfully"
         }
         
+    except HTTPException as http_exc:
+        # Preserve intended HTTP error codes (e.g., 400 from validation/database layer)
+        raise http_exc
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -279,7 +288,30 @@ async def get_portfolio_analysis(
     try:
         financial_data = await financial_collector.collect_all_data(user_id)
         
-        portfolio_analysis = await investment_advisor.analyze_portfolio(financial_data)
+        # Build holdings from DB investments to feed analyzer
+        user_investments = await expense_tracker.db.get_user_investments(user_id)
+        holdings = {}
+        for account in user_investments:
+            for inv in account.get('investments', []):
+                symbol = inv.get('symbol')
+                if not symbol:
+                    continue
+                quantity = float(inv.get('quantity', 0))
+                current_price = float(inv.get('current_price', inv.get('purchase_price', 0)))
+                holdings[symbol] = {
+                    'quantity': quantity,
+                    'current_price': current_price,
+                    'value': quantity * current_price,
+                    'asset_type': inv.get('asset_type', 'stock'),
+                    'account_id': account.get('id')
+                }
+        
+        portfolio_payload = {
+            'holdings': holdings,
+            'target_allocation': {}
+        }
+        
+        portfolio_analysis = await investment_advisor.analyze_portfolio(portfolio_payload)
         
         if "error" in portfolio_analysis:
             raise HTTPException(
@@ -499,6 +531,56 @@ async def test_advice():
         "advice": "Here's my AI-powered financial advice: Consider building an emergency fund of 3-6 months of expenses, diversify your investments across different asset classes, and regularly review your budget to identify savings opportunities.",
         "timestamp": asyncio.get_event_loop().time()
     }
+
+@app.post("/api/v1/simple-advice")
+async def get_simple_advice(query: str):
+    """Simple financial advice endpoint without complex workflow"""
+    try:
+        # Simple response without AI calls
+        advice = f"Based on your query '{query}', here's some general financial advice: Consider diversifying your portfolio, maintaining an emergency fund, and regularly reviewing your financial goals. For specific investment recommendations, consult with a financial advisor."
+        
+        return {
+            "success": True,
+            "advice": advice,
+            "query": query,
+            "timestamp": asyncio.get_event_loop().time()
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "advice": None
+        }
+
+@app.post("/api/v1/quick-advice")
+async def get_quick_advice(query: str):
+    """Quick financial advice with minimal AI usage"""
+    try:
+        # Use a much simpler prompt with minimal data
+        simple_prompt = f"""
+        User Query: {query}
+        
+        Provide brief, actionable financial advice in 2-3 sentences.
+        Focus on general principles like diversification, emergency funds, and long-term planning.
+        """
+        
+        response = await financial_advisor.openai_llm.ainvoke([
+            SystemMessage(content="You are a financial advisor. Give brief, practical advice."),
+            HumanMessage(content=simple_prompt)
+        ])
+        
+        return {
+            "success": True,
+            "advice": response.content,
+            "query": query,
+            "timestamp": asyncio.get_event_loop().time()
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "advice": None
+        }
 
 if __name__ == "__main__":
     import uvicorn

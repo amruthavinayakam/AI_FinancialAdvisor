@@ -13,7 +13,7 @@ class AIConfig(BaseSettings):
     
     # Google Gemini Configuration
     google_api_key: str = os.getenv("GOOGLE_API_KEY", "")
-    google_model: str = os.getenv("GOOGLE_MODEL", "gemini-pro")
+    google_model: str = os.getenv("GOOGLE_MODEL", "gemini-1.5-flash")
     
     # Financial APIs
     alpha_vantage_api_key: str = os.getenv("ALPHA_VANTAGE_API_KEY", "")
@@ -30,7 +30,7 @@ class AIConfig(BaseSettings):
     database_url: str = os.getenv("DATABASE_URL", "")
     
     # AI Model Settings
-    max_tokens: int = int(os.getenv("MAX_TOKENS", "4000"))
+    max_tokens: int = int(os.getenv("MAX_TOKENS", "2000"))
     temperature: float = float(os.getenv("TEMPERATURE", "0.7"))
     
     class Config:

@@ -21,6 +21,8 @@ class FinancialState(TypedDict):
     forecast: Dict[str, Any]
     response: str
     error: str
+    expense_analysis: str
+    investment_advice: str
 
 class FinancialAdvisorGraph:
     """Main LangGraph workflow for personal finance advice"""
@@ -36,7 +38,8 @@ class FinancialAdvisorGraph:
         self.gemini_llm = ChatGoogleGenerativeAI(
             model=ai_config.google_model,
             google_api_key=ai_config.google_api_key,
-            temperature=ai_config.temperature
+            temperature=ai_config.temperature,
+            convert_system_message_to_human=True
         )
         
         self.financial_collector = FinancialDataCollector()
@@ -93,10 +96,13 @@ class FinancialAdvisorGraph:
         try:
             expenses = state["expenses"]
             
-            # Use Gemini for expense analysis
+            # Summarize expenses to reduce token usage
+            expense_summary = self._summarize_expenses(expenses)
+            
+            # Use OpenAI for expense analysis (more reliable)
             expense_analysis_prompt = f"""
-            Analyze the following expenses and provide insights:
-            {expenses}
+            Analyze the following expense summary and provide insights:
+            {expense_summary}
             
             Provide:
             1. Spending patterns
@@ -104,7 +110,7 @@ class FinancialAdvisorGraph:
             3. Budget recommendations
             """
             
-            response = await self.gemini_llm.ainvoke([
+            response = await self.openai_llm.ainvoke([
                 SystemMessage(content="You are a financial expert analyzing personal expenses."),
                 HumanMessage(content=expense_analysis_prompt)
             ])
@@ -116,18 +122,49 @@ class FinancialAdvisorGraph:
         
         return state
     
+    def _summarize_expenses(self, expenses: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Summarize expenses to reduce token usage"""
+        if not expenses:
+            return {"total_expenses": 0, "categories": {}, "count": 0}
+        
+        # Calculate totals by category
+        category_totals = {}
+        total_amount = 0
+        
+        for expense in expenses[:50]:  # Limit to first 50 expenses
+            category = expense.get('category', 'Other')
+            amount = expense.get('amount', 0)
+            
+            if category not in category_totals:
+                category_totals[category] = 0
+            category_totals[category] += amount
+            total_amount += amount
+        
+        # Get top 10 categories
+        top_categories = dict(sorted(category_totals.items(), key=lambda x: x[1], reverse=True)[:10])
+        
+        return {
+            "total_expenses": total_amount,
+            "expense_count": len(expenses),
+            "top_categories": top_categories,
+            "average_expense": total_amount / len(expenses) if expenses else 0
+        }
+    
     async def _generate_investment_advice(self, state: FinancialState) -> FinancialState:
         """Generate investment advice using AI"""
         try:
             financial_data = state["financial_data"]
             user_query = state["user_query"]
             
+            # Summarize financial data to reduce token usage
+            portfolio_summary = self._summarize_portfolio(financial_data)
+            
             # Use GPT-4 for investment advice
             investment_prompt = f"""
             Based on the user's financial data and query, provide personalized investment advice:
             
             User Query: {user_query}
-            Financial Data: {financial_data}
+            Portfolio Summary: {portfolio_summary}
             
             Provide:
             1. Risk assessment
@@ -147,6 +184,32 @@ class FinancialAdvisorGraph:
             state["error"] = f"Error generating investment advice: {str(e)}"
         
         return state
+    
+    def _summarize_portfolio(self, financial_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Summarize portfolio data to reduce token usage"""
+        portfolio = financial_data.get("portfolio", {})
+        market_data = financial_data.get("market_data", {})
+        
+        # Extract key portfolio info
+        portfolio_summary = {
+            "total_value": portfolio.get("total_value", 0),
+            "risk_tolerance": portfolio.get("risk_tolerance", "moderate"),
+            "investment_horizon": portfolio.get("investment_horizon", "10+ years"),
+            "symbols": portfolio.get("symbols", []),
+            "allocations": portfolio.get("allocations", {}),
+            "market_performance": {}
+        }
+        
+        # Summarize market data for each symbol
+        for symbol, data in market_data.items():
+            if not data.get("error"):
+                portfolio_summary["market_performance"][symbol] = {
+                    "current_price": data.get("current_price", 0),
+                    "price_change_pct": data.get("price_change_pct", 0),
+                    "sector": data.get("sector", "Unknown")
+                }
+        
+        return portfolio_summary
     
     async def _forecast_financial_health(self, state: FinancialState) -> FinancialState:
         """Forecast financial health using AI models"""
@@ -209,7 +272,9 @@ class FinancialAdvisorGraph:
             recommendations=[],
             forecast={},
             response="",
-            error=""
+            error="",
+            expense_analysis="",
+            investment_advice=""
         )
         
         try:
