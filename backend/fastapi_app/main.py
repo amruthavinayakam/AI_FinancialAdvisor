@@ -494,6 +494,17 @@ async def test_portfolio():
         }
     }
 
+@app.get("/api/v1/categories")
+async def list_categories(
+    user_id: str = Depends(get_current_user)
+):
+    """List expense categories from the database"""
+    try:
+        categories = await expense_tracker.db.get_expense_categories()
+        return {"success": True, "categories": categories}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error listing categories: {e}")
+
 @app.get("/api/v1/test/forecast")
 async def test_forecast():
     """Test financial forecast endpoint"""

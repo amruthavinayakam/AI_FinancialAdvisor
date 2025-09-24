@@ -619,5 +619,13 @@ class DatabaseManager:
             
             return stats
 
+    async def get_expense_categories(self) -> List[Dict[str, Any]]:
+        """List all expense categories"""
+        async with self.get_connection() as conn:
+            rows = await conn.fetch(
+                "SELECT id, name, description, color, icon, is_active, created_at FROM core_expensecategory ORDER BY name"
+            )
+            return [dict(row) for row in rows]
+
 # Global database manager instance
 db_manager = DatabaseManager()
